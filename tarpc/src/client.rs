@@ -25,6 +25,7 @@ use std::{
         Arc,
     },
 };
+use std::fmt::Debug;
 use tokio::sync::{mpsc, oneshot};
 use tracing::Span;
 
@@ -61,9 +62,9 @@ pub struct NewClient<C, D> {
 }
 
 impl<C, D, E> NewClient<C, D>
-where
-    D: Future<Output = Result<(), E>> + Send + 'static,
-    E: std::error::Error + Send + Sync + 'static,
+    where
+        D: Future<Output=Result<(), E>> + Send + 'static,
+        E: std::error::Error + Send + Sync + 'static,
 {
     /// Helper method to spawn the dispatch on the default executor.
     #[cfg(feature = "tokio1")]
@@ -109,18 +110,18 @@ impl<Req, Resp> Clone for Channel<Req, Resp> {
     }
 }
 
-impl<Req, Resp> Channel<Req, Resp> {
+impl<Req: Debug, Resp: Debug> Channel<Req, Resp> {
     /// Sends a request to the dispatch task to forward to the server, returning a [`Future`] that
     /// resolves to the response.
     #[tracing::instrument(
-        name = "RPC",
-        skip(self, ctx, request_name, request),
-        fields(
-            rpc.trace_id = tracing::field::Empty,
-            rpc.deadline = %humantime::format_rfc3339(ctx.deadline),
-            otel.kind = "client",
-            otel.name = request_name)
-        )]
+    name = "RPC",
+    skip(self, ctx, request_name, request),
+    fields(
+    rpc.trace_id = tracing::field::Empty,
+    rpc.deadline = % humantime::format_rfc3339(ctx.deadline),
+    otel.kind = "client",
+    otel.name = request_name)
+    )]
     pub async fn call(
         &self,
         mut ctx: context::Context,
@@ -158,7 +159,7 @@ impl<Req, Resp> Channel<Req, Resp> {
                 response_completion,
             })
             .await
-            .map_err(|mpsc::error::SendError(_)| RpcError::Disconnected)?;
+            .map_err(|mpsc::error::SendError(dispatch_req)| RpcError::Disconnected(format!("mpsc::error::SendError: {:?}", dispatch_req)))?;
         response_guard.response().await
     }
 }
@@ -179,7 +180,7 @@ struct ResponseGuard<'a, Resp> {
 pub enum RpcError {
     /// The client disconnected from the server.
     #[error("the client disconnected from the server")]
-    Disconnected,
+    Disconnected(String),
     /// The request exceeded its deadline.
     #[error("the request exceeded its deadline")]
     DeadlineExceeded,
@@ -205,7 +206,7 @@ impl<Resp> ResponseGuard<'_, Resp> {
                 // The oneshot is Canceled when the dispatch task ends. In that case,
                 // there's nothing listening on the other side, so there's no point in
                 // propagating cancellation.
-                Err(RpcError::Disconnected)
+                Err(RpcError::Disconnected("oneshot::error::RecvError error, no additional information".to_string()))
             }
         }
     }
@@ -237,8 +238,8 @@ pub fn new<Req, Resp, C>(
     config: Config,
     transport: C,
 ) -> NewClient<Channel<Req, Resp>, RequestDispatch<Req, Resp, C>>
-where
-    C: Transport<ClientMessage<Req>, Response<Resp>>,
+    where
+        C: Transport<ClientMessage<Req>, Response<Resp>>,
 {
     let (to_dispatch, pending_requests) = mpsc::channel(config.pending_request_buffer);
     let (cancellation, canceled_requests) = cancellations();
@@ -282,8 +283,8 @@ pub struct RequestDispatch<Req, Resp, C> {
 /// Critical errors that result in a Channel disconnecting.
 #[derive(thiserror::Error, Debug)]
 pub enum ChannelError<E>
-where
-    E: Error + Send + Sync + 'static,
+    where
+        E: Error + Send + Sync + 'static,
 {
     /// Could not read from the transport.
     #[error("could not read from the transport")]
@@ -306,8 +307,8 @@ where
 }
 
 impl<Req, Resp, C> RequestDispatch<Req, Resp, C>
-where
-    C: Transport<ClientMessage<Req>, Response<Resp>>,
+    where
+        C: Transport<ClientMessage<Req>, Response<Resp>>,
 {
     fn in_flight_requests<'a>(self: &'a mut Pin<&mut Self>) -> &'a mut InFlightRequests<Resp> {
         self.as_mut().project().in_flight_requests
@@ -559,8 +560,8 @@ where
 }
 
 impl<Req, Resp, C> Future for RequestDispatch<Req, Resp, C>
-where
-    C: Transport<ClientMessage<Req>, Response<Resp>>,
+    where
+        C: Transport<ClientMessage<Req>, Response<Resp>>,
 {
     type Output = Result<(), ChannelError<C::Error>>;
 
@@ -673,7 +674,7 @@ mod tests {
             request_id: 0,
             message: Ok("well done"),
         }))
-        .unwrap();
+            .unwrap();
         // resp's drop() is run, but should not send a cancel message.
         ResponseGuard {
             response: &mut response,
@@ -681,9 +682,9 @@ mod tests {
             request_id: 3,
             cancel: true,
         }
-        .response()
-        .await
-        .unwrap();
+            .response()
+            .await
+            .unwrap();
         drop(cancellation);
         let cx = &mut Context::from_waker(noop_waker_ref());
         assert_eq!(canceled_requests.poll_recv(cx), Poll::Ready(None));
@@ -698,7 +699,7 @@ mod tests {
         let _resp = send_request(&mut channel, "hi", tx, &mut rx).await;
 
         #[allow(unstable_name_collisions)]
-        let req = dispatch.as_mut().poll_next_request(cx).ready();
+            let req = dispatch.as_mut().poll_next_request(cx).ready();
         assert!(req.is_some());
 
         let req = req.unwrap();
@@ -724,7 +725,7 @@ mod tests {
                 message: Ok("hello".into()),
             },
         )
-        .await;
+            .await;
         dispatch.await.unwrap();
     }
 
@@ -856,8 +857,8 @@ mod tests {
     }
 
     impl<T, E> PollTest for Poll<Option<Result<T, E>>>
-    where
-        E: ::std::fmt::Display,
+        where
+            E: ::std::fmt::Display,
     {
         type T = Option<T>;
 
